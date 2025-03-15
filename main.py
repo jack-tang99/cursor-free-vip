@@ -9,17 +9,18 @@ import locale
 import platform
 import requests
 import subprocess
+from config import get_config  
 
-# 只在 Windows 系统上导入 windll
+# Only import windll on Windows systems
 if platform.system() == 'Windows':
     import ctypes
     # 只在 Windows 上导入 windll
     from ctypes import windll
 
-# 初始化colorama
+# Initialize colorama
 init()
 
-# 定义emoji和颜色常量
+# Define emoji and color constants
 EMOJI = {
     "FILE": "📄",
     "BACKUP": "💾",
@@ -30,13 +31,47 @@ EMOJI = {
     "MENU": "📋",
     "ARROW": "➜",
     "LANG": "🌐",
-    "UPDATE": "🔄"
+    "UPDATE": "🔄",
+    "ADMIN": "🔐"
 }
+
+# Function to check if running as frozen executable
+def is_frozen():
+    """Check if the script is running as a frozen executable."""
+    return getattr(sys, 'frozen', False)
+
+# Function to check admin privileges (Windows only)
+def is_admin():
+    """Check if the script is running with admin privileges (Windows only)."""
+    if platform.system() == 'Windows':
+        try:
+            return ctypes.windll.shell32.IsUserAnAdmin() != 0
+        except Exception:
+            return False
+    # Always return True for non-Windows to avoid changing behavior
+    return True
+
+# Function to restart with admin privileges
+def run_as_admin():
+    """Restart the current script with admin privileges (Windows only)."""
+    if platform.system() != 'Windows':
+        return False
+        
+    try:
+        args = [sys.executable] + sys.argv
+        
+        # Request elevation via ShellExecute
+        print(f"{Fore.YELLOW}{EMOJI['ADMIN']} Requesting administrator privileges...{Style.RESET_ALL}")
+        ctypes.windll.shell32.ShellExecuteW(None, "runas", args[0], " ".join('"' + arg + '"' for arg in args[1:]), None, 1)
+        return True
+    except Exception as e:
+        print(f"{Fore.RED}{EMOJI['ERROR']} Failed to restart with admin privileges: {e}{Style.RESET_ALL}")
+        return False
 
 class Translator:
     def __init__(self):
         self.translations = {}
-        self.current_language = self.detect_system_language()  # 使用正确的方法名
+        self.current_language = self.detect_system_language()  # Use correct method name
         self.fallback_language = 'en'  # Fallback language if translation is missing
         self.load_translations()
     
@@ -57,11 +92,11 @@ class Translator:
     def _detect_windows_language(self):
         """Detect language on Windows systems"""
         try:
-            # 确保我们在 Windows 上
+            # Ensure we are on Windows
             if platform.system() != 'Windows':
                 return 'en'
                 
-            # 获取键盘布局
+            # Get keyboard layout
             user32 = ctypes.windll.user32
             hwnd = user32.GetForegroundWindow()
             threadid = user32.GetWindowThreadProcessId(hwnd, 0)
@@ -72,6 +107,7 @@ class Translator:
                 0x0409: 'en',      # English
                 0x0404: 'zh_tw',   # Traditional Chinese
                 0x0804: 'zh_cn',   # Simplified Chinese
+                0x0422: 'vi',      # Vietnamese
             }
             
             return language_map.get(layout_id, 'en')
@@ -95,14 +131,20 @@ class Translator:
                 return 'zh_cn'
             elif system_locale.startswith('en'):
                 return 'en'
+            elif system_locale.startswith('vi'):
+                return 'vi'
             
+
             # Try to get language from LANG environment variable as fallback
             env_lang = os.getenv('LANG', '').lower()
             if 'tw' in env_lang or 'hk' in env_lang:
                 return 'zh_tw'
             elif 'cn' in env_lang:
                 return 'zh_cn'
+            elif 'vi' in env_lang:
+                return 'vi'
             
+
             return 'en'
         except:
             return 'en'
@@ -167,20 +209,24 @@ class Translator:
         """Get list of available languages"""
         return list(self.translations.keys())
 
-# 创建翻译器实例
+# Create translator instance
 translator = Translator()
 
 def print_menu():
-    """打印菜单选项"""
+    """Print menu options"""
     print(f"\n{Fore.CYAN}{EMOJI['MENU']} {translator.get('menu.title')}:{Style.RESET_ALL}")
     print(f"{Fore.YELLOW}{'─' * 40}{Style.RESET_ALL}")
     print(f"{Fore.GREEN}0{Style.RESET_ALL}. {EMOJI['ERROR']} {translator.get('menu.exit')}")
     print(f"{Fore.GREEN}1{Style.RESET_ALL}. {EMOJI['RESET']} {translator.get('menu.reset')}")
     print(f"{Fore.GREEN}2{Style.RESET_ALL}. {EMOJI['SUCCESS']} {translator.get('menu.register')}")
-    print(f"{Fore.GREEN}3{Style.RESET_ALL}. {EMOJI['SUCCESS']} {translator.get('menu.register_manual')}")
-    print(f"{Fore.GREEN}4{Style.RESET_ALL}. {EMOJI['ERROR']} {translator.get('menu.quit')}")
-    print(f"{Fore.GREEN}5{Style.RESET_ALL}. {EMOJI['LANG']} {translator.get('menu.select_language')}")
-    print(f"{Fore.GREEN}6{Style.RESET_ALL}. {EMOJI['UPDATE']} {translator.get('menu.disable_auto_update')}")
+    print(f"{Fore.GREEN}3{Style.RESET_ALL}. 🌟 {translator.get('menu.register_google')}")
+    print(f"{Fore.YELLOW}   ┗━━ 🔥 LIFETIME ACCESS ENABLED 🔥{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}4{Style.RESET_ALL}. ⭐ {translator.get('menu.register_github')}")
+    print(f"{Fore.YELLOW}   ┗━━ 🚀 LIFETIME ACCESS ENABLED 🚀{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}5{Style.RESET_ALL}. {EMOJI['SUCCESS']} {translator.get('menu.register_manual')}")
+    print(f"{Fore.GREEN}6{Style.RESET_ALL}. {EMOJI['ERROR']} {translator.get('menu.quit')}")
+    print(f"{Fore.GREEN}7{Style.RESET_ALL}. {EMOJI['LANG']} {translator.get('menu.select_language')}")
+    print(f"{Fore.GREEN}8{Style.RESET_ALL}. {EMOJI['UPDATE']} {translator.get('menu.disable_auto_update')}")
     print(f"{Fore.YELLOW}{'─' * 40}{Style.RESET_ALL}")
 
 def select_language():
@@ -238,6 +284,17 @@ def check_latest_version():
         if latest_version != version:
             print(f"\n{Fore.YELLOW}{EMOJI['INFO']} {translator.get('updater.new_version_available', current=version, latest=latest_version)}{Style.RESET_ALL}")
             
+            # Ask user if they want to update
+            while True:
+                choice = input(f"\n{EMOJI['ARROW']} {Fore.CYAN}{translator.get('updater.update_confirm', choices='Y/n')}: {Style.RESET_ALL}").lower()
+                if choice in ['', 'y', 'yes']:
+                    break
+                elif choice in ['n', 'no']:
+                    print(f"\n{Fore.YELLOW}{EMOJI['INFO']} {translator.get('updater.update_skipped')}{Style.RESET_ALL}")
+                    return
+                else:
+                    print(f"{Fore.RED}{EMOJI['ERROR']} {translator.get('menu.invalid_choice')}{Style.RESET_ALL}")
+            
             try:
                 # Execute update command based on platform
                 if platform.system() == 'Windows':
@@ -284,11 +341,18 @@ def check_latest_version():
         return
 
 def main():
+    # Check for admin privileges if running as executable on Windows only
+    if platform.system() == 'Windows' and is_frozen() and not is_admin():
+        print(f"{Fore.YELLOW}{EMOJI['ADMIN']} Running as executable, administrator privileges required.{Style.RESET_ALL}")
+        if run_as_admin():
+            sys.exit(0)  # Exit after requesting admin privileges
+        else:
+            print(f"{Fore.YELLOW}{EMOJI['INFO']} Continuing without administrator privileges.{Style.RESET_ALL}")
+    
     print_logo()
     
-    # 初始化配置
-    from new_signup import setup_config
-    config = setup_config(translator)
+    # Initialize configuration
+    config = get_config(translator)
     if not config:
         print(f"{Fore.RED}{EMOJI['ERROR']} {translator.get('menu.config_init_failed')}{Style.RESET_ALL}")
         return
@@ -298,7 +362,7 @@ def main():
     
     while True:
         try:
-            choice = input(f"\n{EMOJI['ARROW']} {Fore.CYAN}{translator.get('menu.input_choice', choices='0-6')}: {Style.RESET_ALL}")
+            choice = input(f"\n{EMOJI['ARROW']} {Fore.CYAN}{translator.get('menu.input_choice', choices='0-8')}: {Style.RESET_ALL}")
 
             if choice == "0":
                 print(f"\n{Fore.YELLOW}{EMOJI['INFO']} {translator.get('menu.exit')}...{Style.RESET_ALL}")
@@ -313,18 +377,26 @@ def main():
                 cursor_register.main(translator)
                 print_menu()
             elif choice == "3":
+                import cursor_register_google
+                cursor_register_google.main(translator)
+                print_menu()
+            elif choice == "4":
+                import cursor_register_github
+                cursor_register_github.main(translator)
+                print_menu()
+            elif choice == "5":
                 import cursor_register_manual
                 cursor_register_manual.main(translator)
                 print_menu()
-            elif choice == "4":
+            elif choice == "6":
                 import quit_cursor
                 quit_cursor.quit_cursor(translator)
                 print_menu()
-            elif choice == "5":
+            elif choice == "7":
                 if select_language():
                     print_menu()
                 continue
-            elif choice == "6":
+            elif choice == "8":
                 import disable_auto_update
                 disable_auto_update.run(translator)
                 print_menu()
