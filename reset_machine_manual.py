@@ -13,6 +13,7 @@ from typing import Tuple
 import configparser
 from new_signup import get_user_documents_path
 import traceback
+from config import get_config
 
 # Initialize colorama
 init()
@@ -31,7 +32,7 @@ def get_cursor_paths(translator=None) -> Tuple[str, str]:
     """ Get Cursor related paths"""
     system = platform.system()
     
-    # 讀取配置文件
+    # Read config file
     config = configparser.ConfigParser()
     config_dir = os.path.join(get_user_documents_path(), ".cursor-free-vip")
     config_file = os.path.join(config_dir, "config.ini")
@@ -39,9 +40,9 @@ def get_cursor_paths(translator=None) -> Tuple[str, str]:
     if not os.path.exists(config_file):
         raise OSError(translator.get('reset.config_not_found') if translator else "找不到配置文件")
         
-    config.read(config_file)
+    config.read(config_file, encoding='utf-8')  # Specify encoding
     
-    # 根據系統獲取路徑
+    # Get path based on system
     if system == "Darwin":
         section = 'MacPaths'
     elif system == "Windows":
@@ -62,7 +63,7 @@ def get_cursor_paths(translator=None) -> Tuple[str, str]:
     pkg_path = os.path.join(base_path, "package.json")
     main_path = os.path.join(base_path, "out/main.js")
     
-    # 檢查文件是否存在
+    # Check if files exist
     if not os.path.exists(pkg_path):
         raise OSError(translator.get('reset.package_not_found', path=pkg_path) if translator else f"找不到 package.json: {pkg_path}")
     if not os.path.exists(main_path):
@@ -95,7 +96,7 @@ def get_cursor_machine_id_path(translator=None) -> str:
         if not config.has_section('LinuxPaths'):
             config.add_section('LinuxPaths')
             config.set('LinuxPaths', 'machine_id_path',
-                os.path.expanduser("~/.config/Cursor/machineId"))
+                os.path.expanduser("~/.config/cursor/machineid"))
         return config.get('LinuxPaths', 'machine_id_path')
         
     elif sys.platform == "darwin":  # macOS
@@ -186,7 +187,7 @@ def check_cursor_version(translator) -> bool:
             with open(pkg_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except UnicodeDecodeError:
-            # 如果 UTF-8 讀取失敗，嘗試其他編碼
+            # If UTF-8 reading fails, try other encodings
             with open(pkg_path, "r", encoding="latin-1") as f:
                 data = json.load(f)
                 
@@ -205,15 +206,15 @@ def check_cursor_version(translator) -> bool:
             
         print(f"{Fore.CYAN}{EMOJI['INFO']} {translator.get('reset.found_version', version=version)}{Style.RESET_ALL}")
         
-        # 檢查版本格式
+        # Check version format
         if not re.match(r"^\d+\.\d+\.\d+$", version):
             print(f"{Fore.RED}{EMOJI['ERROR']} {translator.get('reset.invalid_version_format', version=version)}{Style.RESET_ALL}")
             return False
             
-        # 比較版本
+        # Compare versions
         try:
             current = tuple(map(int, version.split(".")))
-            min_ver = (0, 45, 0)  # 直接使用元組而不是字符串
+            min_ver = (0, 45, 0)  # Use tuple directly instead of string
             
             if current >= min_ver:
                 print(f"{Fore.GREEN}{EMOJI['SUCCESS']} {translator.get('reset.version_check_passed', version=version, min_version='0.45.0')}{Style.RESET_ALL}")
@@ -408,7 +409,7 @@ class MachineIDResetter:
         if not os.path.exists(config_file):
             raise FileNotFoundError(f"Config file not found: {config_file}")
         
-        config.read(config_file)
+        config.read(config_file, encoding='utf-8')
 
         # Check operating system
         if sys.platform == "win32":  # Windows
@@ -444,17 +445,17 @@ class MachineIDResetter:
         elif sys.platform == "linux":  # Linux
             if not config.has_section('LinuxPaths'):
                 config.add_section('LinuxPaths')
-                # 获取实际用户的主目录
+                # Get actual user's home directory
                 sudo_user = os.environ.get('SUDO_USER')
                 actual_home = f"/home/{sudo_user}" if sudo_user else os.path.expanduser("~")
                 
                 config.set('LinuxPaths', 'storage_path', os.path.abspath(os.path.join(
                     actual_home,
-                    ".config/Cursor/User/globalStorage/storage.json"
+                    ".config/cursor/User/globalStorage/storage.json"
                 )))
                 config.set('LinuxPaths', 'sqlite_path', os.path.abspath(os.path.join(
                     actual_home,
-                    ".config/Cursor/User/globalStorage/state.vscdb"
+                    ".config/cursor/User/globalStorage/state.vscdb"
                 )))
                 
             self.db_path = config.get('LinuxPaths', 'storage_path')
@@ -690,7 +691,9 @@ class MachineIDResetter:
             return False
 
 def run(translator=None):
-    """Convenient function for directly calling the reset function"""
+    config = get_config(translator)
+    if not config:
+        return False
     print(f"\n{Fore.CYAN}{'='*50}{Style.RESET_ALL}")
     print(f"{Fore.CYAN}{EMOJI['RESET']} {translator.get('reset.title')}{Style.RESET_ALL}")
     print(f"{Fore.CYAN}{'='*50}{Style.RESET_ALL}")
