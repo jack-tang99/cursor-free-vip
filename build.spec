@@ -29,15 +29,24 @@ a = Analysis(
         ('cursor_auth.py', '.'),
         ('reset_machine_manual.py', '.'),
         ('cursor_register.py', '.'),
-        ('browser.py', '.'),
-        ('control.py', '.'),
-        ('.env', '.')
+        ('new_signup.py', '.'),
+        ('new_tempemail.py', '.'),
+        ('quit_cursor.py', '.'),
+        ('cursor_register_manual.py', '.'),
+        ('oauth_auth.py', '.'),
+        ('utils.py', '.'),
+        ('.env', '.'),
+        ('block_domain.txt', '.')
     ],
     hiddenimports=[
         'cursor_auth',
         'reset_machine_manual',
-        'browser',
-        'control'
+        'new_signup',
+        'new_tempemail',
+        'quit_cursor',
+        'cursor_register_manual',
+        'oauth_auth',
+        'utils'
     ],
     hookspath=[],
     hooksconfig={},
