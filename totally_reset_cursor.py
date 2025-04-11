@@ -8,14 +8,13 @@ import sqlite3
 import platform
 import re
 import tempfile
-import glob
 from colorama import Fore, Style, init
 from typing import Tuple
 import configparser
 from new_signup import get_user_documents_path
 import traceback
 from config import get_config
-from datetime import datetime
+import glob
 
 # Initialize colorama
 init()
@@ -48,27 +47,26 @@ def get_cursor_paths(translator=None) -> Tuple[str, str]:
     default_paths = {
         "Darwin": "/Applications/Cursor.app/Contents/Resources/app",
         "Windows": os.path.join(os.getenv("LOCALAPPDATA", ""), "Programs", "Cursor", "resources", "app"),
-        "Linux": ["/opt/Cursor/resources/app", "/usr/share/cursor/resources/app", os.path.expanduser("~/.local/share/cursor/resources/app"), "/usr/lib/cursor/app/"]
+        "Linux": ["/opt/Cursor/resources/app", "/usr/share/cursor/resources/app", os.path.expanduser("~/.local/share/cursor/resources/app")]
     }
     
     if system == "Linux":
-        # Look for extracted AppImage with correct usr structure
+        # Look for extracted AppImage directories - with usr structure
         extracted_usr_paths = glob.glob(os.path.expanduser("~/squashfs-root/usr/share/cursor/resources/app"))
-        # Also check current directory for extraction without home path prefix
+        # Check current directory for extraction without home path prefix
         current_dir_paths = glob.glob("squashfs-root/usr/share/cursor/resources/app")
         
-        # Add any found paths to the Linux paths list
+        # Add all paths to the Linux paths list
         default_paths["Linux"].extend(extracted_usr_paths)
         default_paths["Linux"].extend(current_dir_paths)
-        
-        # Print debug information
+
+        # Print debug info for troubleshooting
         print(f"{Fore.CYAN}{EMOJI['INFO']} Available paths found:{Style.RESET_ALL}")
         for path in default_paths["Linux"]:
             if os.path.exists(path):
                 print(f"{Fore.GREEN}{EMOJI['SUCCESS']} {path} (exists){Style.RESET_ALL}")
             else:
                 print(f"{Fore.RED}{EMOJI['ERROR']} {path} (not found){Style.RESET_ALL}")
-    
     
     # If config doesn't exist, create it with default paths
     if not os.path.exists(config_file):
@@ -180,14 +178,6 @@ def get_cursor_machine_id_path(translator=None) -> str:
 def get_workbench_cursor_path(translator=None) -> str:
     """Get Cursor workbench.desktop.main.js path"""
     system = platform.system()
-
-    # Read configuration
-    config_dir = os.path.join(get_user_documents_path(), ".cursor-free-vip")
-    config_file = os.path.join(config_dir, "config.ini")
-    config = configparser.ConfigParser()
-
-    if os.path.exists(config_file):
-        config.read(config_file)
     
     paths_map = {
         "Darwin": {  # macOS
@@ -195,39 +185,32 @@ def get_workbench_cursor_path(translator=None) -> str:
             "main": "out/vs/workbench/workbench.desktop.main.js"
         },
         "Windows": {
-            "main": "out\\vs\\workbench\\workbench.desktop.main.js"
+            "base": os.path.join(os.getenv("LOCALAPPDATA", ""), "Programs", "Cursor", "resources", "app"),
+            "main": "out/vs/workbench/workbench.desktop.main.js"
         },
         "Linux": {
-            "bases": ["/opt/Cursor/resources/app", "/usr/share/cursor/resources/app", "/usr/lib/cursor/app/"],
+            "bases": ["/opt/Cursor/resources/app", "/usr/share/cursor/resources/app"],
             "main": "out/vs/workbench/workbench.desktop.main.js"
         }
     }
-    
+
     if system == "Linux":
-        # Add extracted AppImage with correct usr structure
+        # Look for extracted AppImage with correct usr structure
         extracted_usr_paths = glob.glob(os.path.expanduser("~/squashfs-root/usr/share/cursor/resources/app"))
-            
+        # Check current directory for extraction
+        current_dir_paths = glob.glob("squashfs-root/usr/share/cursor/resources/app")
+  
+        
         paths_map["Linux"]["bases"].extend(extracted_usr_paths)
+        paths_map["Linux"]["bases"].extend(current_dir_paths)
 
-    if system not in paths_map:
-        raise OSError(translator.get('reset.unsupported_os', system=system) if translator else f"不支持的操作系统: {system}")
-
-    if system == "Linux":
         for base in paths_map["Linux"]["bases"]:
             main_path = os.path.join(base, paths_map["Linux"]["main"])
-            print(f"{Fore.CYAN}{EMOJI['INFO']} Checking path: {main_path}{Style.RESET_ALL}")
             if os.path.exists(main_path):
                 return main_path
+        raise OSError(translator.get('reset.linux_path_not_found') if translator else "在 Linux 系统上未找到 Cursor 安装路径")
 
-    if system == "Windows":
-        base_path = config.get('WindowsPaths', 'cursor_path')
-    elif system == "Darwin":
-        base_path = paths_map[system]["base"]
-    else:  # Linux
-        # For Linux, we've already checked all bases in the loop above
-        # If we're here, it means none of the bases worked, so we'll use the first one
-        base_path = paths_map[system]["bases"][0]
-
+    base_path = paths_map[system]["base"]
     main_path = os.path.join(base_path, paths_map[system]["main"])
     
     if not os.path.exists(main_path):
@@ -339,40 +322,37 @@ def modify_workbench_js(file_path: str, translator=None) -> bool:
             with open(file_path, "r", encoding="utf-8", errors="ignore") as main_file:
                 content = main_file.read()
 
-            patterns = {
-                # 通用按钮替换模式
-                r'B(k,D(Ln,{title:"Upgrade to Pro",size:"small",get codicon(){return A.rocket},get onClick(){return t.pay}}),null)': r'B(k,D(Ln,{title:"yeongpin GitHub",size:"small",get codicon(){return A.github},get onClick(){return function(){window.open("https://github.com/yeongpin/cursor-free-vip","_blank")}}}),null)',
-                
-                # Windows/Linux/Mac 通用按钮替换模式
-                r'M(x,I(as,{title:"Upgrade to Pro",size:"small",get codicon(){return $.rocket},get onClick(){return t.pay}}),null)': r'M(x,I(as,{title:"yeongpin GitHub",size:"small",get codicon(){return $.rocket},get onClick(){return function(){window.open("https://github.com/yeongpin/cursor-free-vip","_blank")}}}),null)',
-                
-                # Badge 替换
-                r'<div>Pro Trial': r'<div>Pro',
+            if sys.platform == "win32":
+                # Define replacement patterns
+                CButton_old_pattern = r'$(k,E(Ks,{title:"Upgrade to Pro",size:"small",get codicon(){return F.rocket},get onClick(){return t.pay}}),null)'
+                CButton_new_pattern = r'$(k,E(Ks,{title:"yeongpin GitHub",size:"small",get codicon(){return F.rocket},get onClick(){return function(){window.open("https://github.com/yeongpin/cursor-free-vip","_blank")}}}),null)'
+            elif sys.platform == "linux":
+                CButton_old_pattern = r'$(k,E(Ks,{title:"Upgrade to Pro",size:"small",get codicon(){return F.rocket},get onClick(){return t.pay}}),null)'
+                CButton_new_pattern = r'$(k,E(Ks,{title:"yeongpin GitHub",size:"small",get codicon(){return F.rocket},get onClick(){return function(){window.open("https://github.com/yeongpin/cursor-free-vip","_blank")}}}),null)'
+            elif sys.platform == "darwin":
+                CButton_old_pattern = r'M(x,I(as,{title:"Upgrade to Pro",size:"small",get codicon(){return $.rocket},get onClick(){return t.pay}}),null)'
+                CButton_new_pattern = r'M(x,I(as,{title:"yeongpin GitHub",size:"small",get codicon(){return $.rocket},get onClick(){return function(){window.open("https://github.com/yeongpin/cursor-free-vip","_blank")}}}),null)'
 
-                r'py-1">Auto-select': r'py-1">Bypass-Version-Pin',
-                
-                #
-                r'async getEffectiveTokenLimit(e){const n=e.modelName;if(!n)return 2e5;':r'async getEffectiveTokenLimit(e){return 9000000;const n=e.modelName;if(!n)return 9e5;',
-                # Pro
-                r'var DWr=ne("<div class=settings__item_description>You are currently signed in with <strong></strong>.");': r'var DWr=ne("<div class=settings__item_description>You are currently signed in with <strong></strong>. <h1>Pro</h1>");',
-                
-                # Toast 替换
-                r'notifications-toasts': r'notifications-toasts hidden'
-            }
+            CBadge_old_pattern = r'<div>Pro Trial'
+            CBadge_new_pattern = r'<div>Pro'
 
-            # 使用patterns进行替换
-            for old_pattern, new_pattern in patterns.items():
-                content = content.replace(old_pattern, new_pattern)
+            CToast_old_pattern = r'notifications-toasts'
+            CToast_new_pattern = r'notifications-toasts hidden'
+
+            # Replace content
+            content = content.replace(CButton_old_pattern, CButton_new_pattern)
+            content = content.replace(CBadge_old_pattern, CBadge_new_pattern)
+            content = content.replace(CToast_old_pattern, CToast_new_pattern)
 
             # Write to temporary file
             tmp_file.write(content)
             tmp_path = tmp_file.name
 
-        # Backup original file with timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = f"{file_path}.backup.{timestamp}"
+        # Backup original file
+        backup_path = file_path + ".backup"
+        if os.path.exists(backup_path):
+            os.remove(backup_path)
         shutil.copy2(file_path, backup_path)
-        print(f"{Fore.GREEN}{EMOJI['SUCCESS']} {translator.get('reset.backup_created', path=backup_path)}{Style.RESET_ALL}")
         
         # Move temporary file to original position
         if os.path.exists(file_path):
@@ -419,10 +399,7 @@ def modify_main_js(main_path: str, translator) -> bool:
             tmp_file.write(content)
             tmp_path = tmp_file.name
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = f"{main_path}.old.{timestamp}"
-        shutil.copy2(main_path, backup_path)
-        print(f"{Fore.GREEN}{EMOJI['SUCCESS']} {translator.get('reset.backup_created', path=backup_path)}{Style.RESET_ALL}")
+        shutil.copy2(main_path, main_path + ".old")
         shutil.move(tmp_path, main_path)
 
         os.chmod(main_path, original_mode)
@@ -472,8 +449,7 @@ def patch_cursor_get_machine_id(translator) -> bool:
         print(f"{Fore.CYAN}{EMOJI['INFO']} {translator.get('reset.version_check_passed')}{Style.RESET_ALL}")
 
         # Backup file
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = f"{main_path}.bak.{timestamp}"
+        backup_path = main_path + ".bak"
         if not os.path.exists(backup_path):
             shutil.copy2(main_path, backup_path)
             print(f"{Fore.GREEN}{EMOJI['SUCCESS']} {translator.get('reset.backup_created', path=backup_path)}{Style.RESET_ALL}")
@@ -650,8 +626,8 @@ class MachineIDResetter:
             winreg.SetValueEx(key, "MachineGuid", 0, winreg.REG_SZ, new_guid)
             winreg.CloseKey(key)
             print(f"{Fore.GREEN}{EMOJI['SUCCESS']} {self.translator.get('reset.windows_machine_guid_updated')}{Style.RESET_ALL}")
-        except PermissionError as e:
-            print(f"{Fore.RED}{EMOJI['ERROR']} {self.translator.get('reset.permission_denied', error=str(e))}{Style.RESET_ALL}")
+        except PermissionError:
+            print(f"{Fore.RED}{EMOJI['ERROR']} {self.translator.get('reset.permission_denied')}{Style.RESET_ALL}")
             raise
         except Exception as e:
             print(f"{Fore.RED}{EMOJI['ERROR']} {self.translator.get('reset.update_windows_machine_guid_failed', error=str(e))}{Style.RESET_ALL}")
@@ -729,10 +705,12 @@ class MachineIDResetter:
             with open(self.db_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
 
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_path = f"{self.db_path}.bak.{timestamp}"
-            print(f"{Fore.YELLOW}{EMOJI['BACKUP']} {self.translator.get('reset.creating_backup')}: {backup_path}{Style.RESET_ALL}")
-            shutil.copy2(self.db_path, backup_path)
+            backup_path = self.db_path + ".bak"
+            if not os.path.exists(backup_path):
+                print(f"{Fore.YELLOW}{EMOJI['BACKUP']} {self.translator.get('reset.creating_backup')}: {backup_path}{Style.RESET_ALL}")
+                shutil.copy2(self.db_path, backup_path)
+            else:
+                print(f"{Fore.YELLOW}{EMOJI['INFO']} {self.translator.get('reset.backup_exists')}{Style.RESET_ALL}")
 
             print(f"{Fore.CYAN}{EMOJI['RESET']} {self.translator.get('reset.generating')}...{Style.RESET_ALL}")
             new_ids = self.generate_new_ids()
@@ -796,8 +774,7 @@ class MachineIDResetter:
 
             # Create backup if file exists
             if os.path.exists(machine_id_path):
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                backup_path = f"{machine_id_path}.backup.{timestamp}"
+                backup_path = machine_id_path + ".backup"
                 try:
                     shutil.copy2(machine_id_path, backup_path)
                     print(f"{Fore.GREEN}{EMOJI['INFO']} {self.translator.get('reset.backup_created', path=backup_path) if self.translator else f'Backup created at: {backup_path}'}{Style.RESET_ALL}")
