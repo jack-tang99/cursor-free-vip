@@ -7,20 +7,38 @@ from colorama import Fore, Style
 import configparser
 from pathlib import Path
 import sys
+from config import get_config 
+from utils import get_default_browser_path as utils_get_default_browser_path
 
-# 在文件开头添加全局变量
+# Add global variable at the beginning of the file
 _translator = None
 
+# Add global variable to track our Chrome processes
+_chrome_process_ids = []
+
 def cleanup_chrome_processes(translator=None):
-    """清理所有Chrome相关进程"""
-    print("\n正在清理Chrome进程...")
+    """Clean only Chrome processes launched by this script"""
+    global _chrome_process_ids
+    
+    if not _chrome_process_ids:
+        print("\nNo Chrome processes to clean...")
+        return
+        
+    print("\nCleaning Chrome processes launched by this script...")
     try:
         if os.name == 'nt':
-            os.system('taskkill /F /IM chrome.exe /T 2>nul')
-            os.system('taskkill /F /IM chromedriver.exe /T 2>nul')
+            for pid in _chrome_process_ids:
+                try:
+                    os.system(f'taskkill /F /PID {pid} /T 2>nul')
+                except:
+                    pass
         else:
-            os.system('pkill -f chrome')
-            os.system('pkill -f chromedriver')
+            for pid in _chrome_process_ids:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except:
+                    pass
+        _chrome_process_ids = []  # Reset the list after cleanup
     except Exception as e:
         if translator:
             print(f"{Fore.RED}❌ {translator.get('register.cleanup_error', error=str(e))}{Style.RESET_ALL}")
@@ -28,7 +46,7 @@ def cleanup_chrome_processes(translator=None):
             print(f"清理进程时出错: {e}")
 
 def signal_handler(signum, frame):
-    """处理Ctrl+C信号"""
+    """Handle Ctrl+C signal"""
     global _translator
     if _translator:
         print(f"{Fore.CYAN}{_translator.get('register.exit_signal')}{Style.RESET_ALL}")
@@ -38,45 +56,45 @@ def signal_handler(signum, frame):
     os._exit(0)
 
 def simulate_human_input(page, url, config, translator=None):
-    """访问网址"""
+    """Visit URL"""
     if translator:
         print(f"{Fore.CYAN}🚀 {translator.get('register.visiting_url')}: {url}{Style.RESET_ALL}")
     
-    # 先访问空白页面
+    # First visit blank page
     page.get('about:blank')
     time.sleep(get_random_wait_time(config, 'page_load_wait'))
     
-    # 访问目标页面
+    # Visit target page
     page.get(url)
     time.sleep(get_random_wait_time(config, 'page_load_wait'))
 
 def fill_signup_form(page, first_name, last_name, email, config, translator=None):
-    """填写注册表单"""
+    """Fill signup form"""
     try:
         if translator:
             print(f"{Fore.CYAN}📧 {translator.get('register.filling_form')}{Style.RESET_ALL}")
         else:
             print("\n正在填写注册表单...")
         
-        # 填写名字
+        # Fill first name
         first_name_input = page.ele("@name=first_name")
         if first_name_input:
             first_name_input.input(first_name)
             time.sleep(get_random_wait_time(config, 'input_wait'))
         
-        # 填写姓氏
+        # Fill last name
         last_name_input = page.ele("@name=last_name")
         if last_name_input:
             last_name_input.input(last_name)
             time.sleep(get_random_wait_time(config, 'input_wait'))
         
-        # 填写邮箱
+        # Fill email
         email_input = page.ele("@name=email")
         if email_input:
             email_input.input(email)
             time.sleep(get_random_wait_time(config, 'input_wait'))
         
-        # 点击提交按钮
+        # Click submit button
         submit_button = page.ele("@type=submit")
         if submit_button:
             submit_button.click()
@@ -85,43 +103,27 @@ def fill_signup_form(page, first_name, last_name, email, config, translator=None
         if translator:
             print(f"{Fore.GREEN}✅ {translator.get('register.form_success')}{Style.RESET_ALL}")
         else:
-            print("表单填写完成")
+            print("Form filled successfully")
         return True
         
     except Exception as e:
         if translator:
             print(f"{Fore.RED}❌ {translator.get('register.form_error', error=str(e))}{Style.RESET_ALL}")
         else:
-            print(f"填写表单时出错: {e}")
+            print(f"Error filling form: {e}")
         return False
-
-def get_default_chrome_path():
-    """Get default Chrome path"""
-    if sys.platform == "win32":
-        paths = [
-            os.path.join(os.environ.get('PROGRAMFILES', ''), 'Google/Chrome/Application/chrome.exe'),
-            os.path.join(os.environ.get('PROGRAMFILES(X86)', ''), 'Google/Chrome/Application/chrome.exe'),
-            os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Google/Chrome/Application/chrome.exe')
-        ]
-    elif sys.platform == "darwin":
-        paths = [
-            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-        ]
-    else:  # Linux
-        paths = [
-            "/usr/bin/google-chrome",
-            "/usr/bin/google-chrome-stable"
-        ]
-
-    for path in paths:
-        if os.path.exists(path):
-            return path
-    return ""
 
 def get_user_documents_path():
     """Get user Documents folder path"""
     if sys.platform == "win32":
-        return os.path.join(os.path.expanduser("~"), "Documents")
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders") as key:
+                documents_path, _ = winreg.QueryValueEx(key, "Personal")
+                return documents_path
+        except Exception as e:
+            # fallback
+            return os.path.join(os.path.expanduser("~"), "Documents")
     elif sys.platform == "darwin":
         return os.path.join(os.path.expanduser("~"), "Documents")
     else:  # Linux
@@ -142,7 +144,7 @@ def get_random_wait_time(config, timing_type='page_load_wait'):
     """
     try:
         if not config.has_section('Timing'):
-            return random.uniform(0.1, 0.8)  # 默认值
+            return random.uniform(0.1, 0.8)  # Default value
             
         if timing_type == 'random':
             min_time = float(config.get('Timing', 'min_random_time', fallback='0.1'))
@@ -151,159 +153,64 @@ def get_random_wait_time(config, timing_type='page_load_wait'):
             
         time_value = config.get('Timing', timing_type, fallback='0.1-0.8')
         
-        # 检查是否为固定时间值
+        # Check if it's a fixed time value
         if '-' not in time_value and ',' not in time_value:
-            return float(time_value)  # 返回固定时间
+            return float(time_value)  # Return fixed time
             
-        # 处理范围时间
+        # Process range time
         min_time, max_time = map(float, time_value.split('-' if '-' in time_value else ','))
         return random.uniform(min_time, max_time)
     except:
-        return random.uniform(0.1, 0.8)  # 出错时返回默认值
-
-def setup_config(translator=None):
-    """Setup configuration file and return config object"""
-    try:
-        # Set configuration file path
-        config_dir = os.path.join(get_user_documents_path(), ".cursor-free-vip")
-        config_file = os.path.join(config_dir, "config.ini")
-
-        # Create config directory (if it doesn't exist)
-        os.makedirs(config_dir, exist_ok=True)
-
-        # Read or create configuration file
-        config = configparser.ConfigParser()
-        
-        # 默认配置
-        default_config = {
-            'Chrome': {
-                'chromepath': get_default_chrome_path()
-            },
-            'Turnstile': {
-                'handle_turnstile_time': '2',
-                'handle_turnstile_random_time': '1-3'
-            },
-            'Timing': {
-                'min_random_time': '0.1',
-                'max_random_time': '0.8',
-                'page_load_wait': '0.1-0.8',
-                'input_wait': '0.3-0.8',
-                'submit_wait': '0.5-1.5',
-                'verification_code_input': '0.1-0.3',    # 验证码输入间隔
-                'verification_success_wait': '2-3',       # 验证成功后等待
-                'verification_retry_wait': '2-3',         # 验证重试等待
-                'email_check_initial_wait': '4-6',        # 首次等待邮件时间
-                'email_refresh_wait': '2-4',              # 邮箱刷新等待时间
-                'settings_page_load_wait': '1-2',         # 设置页面加载等待
-                'failed_retry_time': '0.5-1',             # 验证失败重试等待时间
-                'retry_interval': '8-12',                 # 重试间隔时间
-                'max_timeout': '160'                      # 最大超时时间
-            }
-        }
-
-        # Add OS-specific path configurations
-        if sys.platform == "win32":
-            appdata = os.getenv("APPDATA")
-            default_config['WindowsPaths'] = {
-                'storage_path': os.path.join(appdata, "Cursor", "User", "globalStorage", "storage.json"),
-                'sqlite_path': os.path.join(appdata, "Cursor", "User", "globalStorage", "state.vscdb"),
-                'machine_id_path': os.path.join(os.getenv("APPDATA"), "Cursor", "machineId"),
-                'cursor_path': os.path.join(os.getenv("LOCALAPPDATA", ""), "Programs", "Cursor", "resources", "app")
-            }
-        elif sys.platform == "darwin":
-            default_config['MacPaths'] = {
-                'storage_path': os.path.abspath(os.path.expanduser("~/Library/Application Support/Cursor/User/globalStorage/storage.json")),
-                'sqlite_path': os.path.abspath(os.path.expanduser("~/Library/Application Support/Cursor/User/globalStorage/state.vscdb")),
-                'machine_id_path': os.path.expanduser("~/Library/Application Support/Cursor/machineId"),
-                'cursor_path': "/Applications/Cursor.app/Contents/Resources/app"
-            }
-        elif sys.platform == "linux":
-            sudo_user = os.environ.get('SUDO_USER')
-            actual_home = f"/home/{sudo_user}" if sudo_user else os.path.expanduser("~")
-            
-            default_config['LinuxPaths'] = {
-                'storage_path': os.path.abspath(os.path.join(actual_home, ".config/Cursor/User/globalStorage/storage.json")),
-                'sqlite_path': os.path.abspath(os.path.join(actual_home, ".config/Cursor/User/globalStorage/state.vscdb")),
-                'machine_id_path': os.path.expanduser("~/.config/Cursor/machineId"),
-                'cursor_path': "/opt/Cursor/resources/app"  # 默認路徑
-            }
-
-        if os.path.exists(config_file):
-            config.read(config_file)
-            config_modified = False
-
-            # 检查并添加缺失的配置项
-            for section, options in default_config.items():
-                if not config.has_section(section):
-                    config.add_section(section)
-                    config_modified = True
-                for option, value in options.items():
-                    if not config.has_option(section, option):
-                        config.set(section, option, value)
-                        config_modified = True
-                        if translator:
-                            print(f"{Fore.YELLOW}ℹ️ {translator.get('register.config_option_added', option=f'{section}.{option}') if translator else f'添加配置项: {section}.{option}'}{Style.RESET_ALL}")
-
-            # 如果有新增配置项，保存文件
-            if config_modified:
-                with open(config_file, 'w', encoding='utf-8') as f:
-                    config.write(f)
-                if translator:
-                    print(f"{Fore.GREEN}✅ {translator.get('register.config_updated') if translator else '配置文件已更新'}{Style.RESET_ALL}")
-        else:
-            # 创建新配置文件
-            config = configparser.ConfigParser()
-            for section, options in default_config.items():
-                config.add_section(section)
-                for option, value in options.items():
-                    config.set(section, option, value)
-            
-            with open(config_file, 'w', encoding='utf-8') as f:
-                config.write(f)
-            if translator:
-                print(f"{Fore.GREEN}✅ {translator.get('register.config_created') if translator else '已创建配置文件'}: {config_file}{Style.RESET_ALL}")
-
-        return config
-
-    except Exception as e:
-        if translator:
-            print(f"{Fore.RED}❌ {translator.get('register.config_setup_error', error=str(e)) if translator else f'配置设置出错: {str(e)}'}{Style.RESET_ALL}")
-        raise
+        return random.uniform(0.1, 0.8)  # Return default value when error
 
 def setup_driver(translator=None):
     """Setup browser driver"""
+    global _chrome_process_ids
+    
     try:
-        # 获取配置
-        config = setup_config(translator)
+        # Get config
+        config = get_config(translator)
         
-        # Get Chrome path
-        chrome_path = config.get('Chrome', 'chromepath', fallback=get_default_chrome_path())
+        # Get browser type and path
+        browser_type = config.get('Browser', 'default_browser', fallback='chrome')
+        browser_path = config.get('Browser', f'{browser_type}_path', fallback=utils_get_default_browser_path(browser_type))
         
-        if not chrome_path or not os.path.exists(chrome_path):
+        if not browser_path or not os.path.exists(browser_path):
             if translator:
-                print(f"{Fore.YELLOW}⚠️ {translator.get('register.chrome_path_invalid') if translator else 'Chrome路径无效，使用默认路径'}{Style.RESET_ALL}")
-            chrome_path = get_default_chrome_path()
+                print(f"{Fore.YELLOW}⚠️ {browser_type} {translator.get('register.browser_path_invalid')}{Style.RESET_ALL}")
+            browser_path = utils_get_default_browser_path(browser_type)
+
+        # For backward compatibility, also check Chrome path
+        if browser_type == 'chrome':
+            chrome_path = config.get('Chrome', 'chromepath', fallback=None)
+            if chrome_path and os.path.exists(chrome_path):
+                browser_path = chrome_path
 
         # Set browser options
         co = ChromiumOptions()
         
-        # Set Chrome path
-        co.set_browser_path(chrome_path)
+        # Set browser path
+        co.set_browser_path(browser_path)
         
         # Use incognito mode
         co.set_argument("--incognito")
 
-        # 设置随机端口
-        co.set_argument("--no-sandbox")
-        
-        # 设置随机端口
+        if sys.platform == "linux":
+            # Set Linux specific options
+            co.set_argument("--no-sandbox")
+            
+        # Set random port
         co.auto_port()
         
-        # 使用有头模式(一定要设置为False，模拟人类操作)
+        # Use headless mode (must be set to False, simulate human operation)
         co.headless(False)
         
+        # Log browser info
+        if translator:
+            print(f"{Fore.CYAN}🌐 {translator.get('register.using_browser', browser=browser_type, path=browser_path)}{Style.RESET_ALL}")
+        
         try:
-            # 加载插件
+            # Load extension
             extension_path = os.path.join(os.getcwd(), "turnstilePatch")
             if os.path.exists(extension_path):
                 co.set_argument("--allow-extensions-in-incognito")
@@ -312,40 +219,76 @@ def setup_driver(translator=None):
             if translator:
                 print(f"{Fore.RED}❌ {translator.get('register.extension_load_error', error=str(e))}{Style.RESET_ALL}")
             else:
-                print(f"加载插件失败: {e}")
+                print(f"Error loading extension: {e}")
         
         if translator:
             print(f"{Fore.CYAN}🚀 {translator.get('register.starting_browser')}{Style.RESET_ALL}")
         else:
-            print("正在启动浏览器...")
+            print("Starting browser...")
         
+        # Record Chrome processes before launching
+        before_pids = []
+        try:
+            import psutil
+            browser_process_names = {
+                'chrome': ['chrome', 'chromium'],
+                'edge': ['msedge', 'edge'],
+                'firefox': ['firefox'],
+                'brave': ['brave', 'brave-browser']
+            }
+            process_names = browser_process_names.get(browser_type, ['chrome'])
+            before_pids = [p.pid for p in psutil.process_iter() if any(name in p.name().lower() for name in process_names)]
+        except:
+            pass
+            
+        # Launch browser
         page = ChromiumPage(co)
+        
+        # Wait a moment for browser to fully launch
+        time.sleep(1)
+        
+        # Record browser processes after launching and find new ones
+        try:
+            import psutil
+            process_names = browser_process_names.get(browser_type, ['chrome'])
+            after_pids = [p.pid for p in psutil.process_iter() if any(name in p.name().lower() for name in process_names)]
+            # Find new browser processes
+            new_pids = [pid for pid in after_pids if pid not in before_pids]
+            _chrome_process_ids.extend(new_pids)
+            
+            if _chrome_process_ids:
+                print(f"{translator.get('register.tracking_processes', count=len(_chrome_process_ids), browser=browser_type)}")
+            else:
+                print(f"{Fore.YELLOW}Warning: {translator.get('register.no_new_processes_detected', browser=browser_type)}{Style.RESET_ALL}")
+        except Exception as e:
+            print(f"{translator.get('register.could_not_track_processes', browser=browser_type, error=str(e))}")
+            
         return config, page
 
     except Exception as e:
         if translator:
             print(f"{Fore.RED}❌ {translator.get('register.browser_setup_error', error=str(e))}{Style.RESET_ALL}")
         else:
-            print(f"设置浏览器时出错: {e}")
+            print(f"Error setting up browser: {e}")
         raise
 
 def handle_turnstile(page, config, translator=None):
-    """处理 Turnstile 验证"""
+    """Handle Turnstile verification"""
     try:
         if translator:
             print(f"{Fore.CYAN}🔄 {translator.get('register.handling_turnstile')}{Style.RESET_ALL}")
         else:
-            print("\n正在处理 Turnstile 验证...")
+            print("\nHandling Turnstile verification...")
         
         # from config
         turnstile_time = float(config.get('Turnstile', 'handle_turnstile_time', fallback='2'))
         random_time_str = config.get('Turnstile', 'handle_turnstile_random_time', fallback='1-3')
         
-        # 解析随机时间范围
+        # Parse random time range
         try:
             min_time, max_time = map(float, random_time_str.split('-'))
         except:
-            min_time, max_time = 1, 3  # 默认值
+            min_time, max_time = 1, 3  # Default value
         
         max_retries = 2
         retry_count = 0
@@ -355,14 +298,14 @@ def handle_turnstile(page, config, translator=None):
             if translator:
                 print(f"{Fore.CYAN}🔄 {translator.get('register.retry_verification', attempt=retry_count)}{Style.RESET_ALL}")
             else:
-                print(f"第 {retry_count} 次尝试验证...")
+                print(f"Attempt {retry_count} of verification...")
 
             try:
-                # 尝试重置 turnstile
+                # Try to reset turnstile
                 page.run_js("try { turnstile.reset() } catch(e) { }")
                 time.sleep(turnstile_time)  # from config
 
-                # 定位验证框元素
+                # Locate verification box element
                 challenge_check = (
                     page.ele("@id=cf-turnstile", timeout=2)
                     .child()
@@ -375,7 +318,7 @@ def handle_turnstile(page, config, translator=None):
                     if translator:
                         print(f"{Fore.CYAN}🔄 {translator.get('register.detect_turnstile')}{Style.RESET_ALL}")
                     else:
-                        print("检测到验证框...")
+                        print("Detected verification box...")
                     
                     # from config
                     time.sleep(random.uniform(min_time, max_time))
@@ -387,21 +330,21 @@ def handle_turnstile(page, config, translator=None):
                         if translator:
                             print(f"{Fore.GREEN}✅ {translator.get('register.verification_success')}{Style.RESET_ALL}")
                         else:
-                            print("验证通过！")
+                            print("Verification successful!")
                         return True
 
             except Exception as e:
                 if translator:
                     print(f"{Fore.RED}❌ {translator.get('register.verification_failed')}{Style.RESET_ALL}")
                 else:
-                    print(f"验证尝试失败: {e}")
+                    print(f"Verification attempt failed: {e}")
 
-            # 检查是否已经验证成功
+            # Check if verification has been successful
             if check_verification_success(page, translator):
                 if translator:
                     print(f"{Fore.GREEN}✅ {translator.get('register.verification_success')}{Style.RESET_ALL}")
                 else:
-                    print("验证通过！")
+                    print("Verification successful!")
                 return True
 
             time.sleep(random.uniform(min_time, max_time))
@@ -409,27 +352,27 @@ def handle_turnstile(page, config, translator=None):
         if translator:
             print(f"{Fore.RED}❌ {translator.get('register.verification_failed')}{Style.RESET_ALL}")
         else:
-            print("超出最大重试次数")
+            print("Exceeded maximum retry attempts")
         return False
 
     except Exception as e:
         if translator:
             print(f"{Fore.RED}❌ {translator.get('register.verification_error', error=str(e))}{Style.RESET_ALL}")
         else:
-            print(f"验证过程出错: {e}")
+            print(f"Error in verification process: {e}")
         return False
 
 def check_verification_success(page, translator=None):
-    """检查验证是否成功"""
+    """Check if verification is successful"""
     try:
-        # 检查是否存在后续表单元素，这表示验证已通过
+        # Check if there is a subsequent form element, indicating verification has passed
         if (page.ele("@name=password", timeout=0.5) or 
             page.ele("@name=email", timeout=0.5) or
             page.ele("@data-index=0", timeout=0.5) or
             page.ele("Account Settings", timeout=0.5)):
             return True
         
-        # 检查是否出现错误消息
+        # Check if there is an error message
         error_messages = [
             'xpath://div[contains(text(), "Can\'t verify the user is human")]',
             'xpath://div[contains(text(), "Error: 600010")]',
@@ -445,67 +388,49 @@ def check_verification_success(page, translator=None):
         return False
 
 def generate_password(length=12):
-    """生成随机密码"""
+    """Generate random password"""
     chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"
     return ''.join(random.choices(chars, k=length))
 
-def fill_password(page, password: str, config, translator=None) -> bool:
+def fill_password(page, password: str, config, translator=None):
     """
-    填写密码表单
+    Fill password form
     """
     try:
-        print(f"{Fore.CYAN}🔑 {translator.get('register.setting_password') if translator else '设置密码'}{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}🔑 {translator.get('register.setting_password') if translator else 'Setting password'}{Style.RESET_ALL}")
         
-        # 等待密码框出现并尝试多次
-        max_retries = 5
-        for i in range(max_retries):
-            # 检查是否出现错误信息
-            if page.ele("This email is not available."):
-                print(f"{Fore.RED}❌ {translator.get('register.email_used') if translator else '注册失败：邮箱已被使用'}{Style.RESET_ALL}")
-                return False
+        # Fill password
+        password_input = page.ele("@name=password")
+        print(f"{Fore.CYAN}🔑 {translator.get('register.setting_on_password')}: {password}{Style.RESET_ALL}")
+        if password_input:
+            password_input.input(password)
 
-            # 查找密码输入框
-            password_input = page.ele("@name=password")
-            if password_input:
-                # 清除可能存在的旧值并输入新密码
-                password_input.click()
-                time.sleep(get_random_wait_time(config, 'input_wait'))
-                password_input.input(password)
-                time.sleep(get_random_wait_time(config, 'input_wait'))
-
-                # 查找并点击提交按钮
-                submit_button = page.ele("@type=submit")
-                if submit_button:
-                    submit_button.click()
-                    print(f"{Fore.GREEN}✅ {translator.get('register.password_submitted') if translator else '密码已提交'}{Style.RESET_ALL}")
-                    time.sleep(get_random_wait_time(config, 'submit_wait'))
-                    return True
-                else:
-                    print(f"{Fore.YELLOW}⚠️ {translator.get('register.retry_submit') if translator else '未找到提交按钮，重试中...'}{Style.RESET_ALL}")
+        # Click submit button
+        submit_button = page.ele("@type=submit")
+        if submit_button:
+            submit_button.click()
+            time.sleep(get_random_wait_time(config, 'submit_wait'))
             
-            # 如果没找到密码框，等待后重试
-            time.sleep(get_random_wait_time(config, 'failed_retry_time'))
-            if i < max_retries - 1:  # 不是最后一次尝试时才打印
-                print(f"{Fore.YELLOW}⚠️ {translator.get('register.retry_password', attempt=i+1) if translator else f'第 {i+1} 次尝试设置密码...'}{Style.RESET_ALL}")
-
-        print(f"{Fore.RED}❌ {translator.get('register.password_set_failed') if translator else '密码设置失败：超过重试次数'}{Style.RESET_ALL}")
-        return False
-
+        print(f"{Fore.GREEN}✅ {translator.get('register.password_submitted') if translator else 'Password submitted'}{Style.RESET_ALL}")
+        
+        return True
+        
     except Exception as e:
-        print(f"{Fore.RED}❌ {translator.get('register.password_error', error=str(e)) if translator else f'设置密码时出错: {str(e)}'}{Style.RESET_ALL}")
+        print(f"{Fore.RED}❌ {translator.get('register.password_error', error=str(e)) if translator else f'Error setting password: {str(e)}'}{Style.RESET_ALL}")
+
         return False
 
-def handle_verification_code(browser_tab, email_tab, controller, email, password, config, translator=None):
-    """处理验证码"""
+def handle_verification_code(browser_tab, email_tab, controller, config, translator=None):
+    """Handle verification code"""
     try:
         if translator:
-            print(f"\n{Fore.CYAN}{translator.get('register.waiting_for_verification_code')}{Style.RESET_ALL}")
+            print(f"\n{Fore.CYAN}🔄 {translator.get('register.waiting_for_verification_code')}{Style.RESET_ALL}")
             
-        # 检查是否使用手动输入验证码
-        if hasattr(controller, 'get_verification_code') and email_tab is None:  # 手动模式
+        # Check if using manual input verification code
+        if hasattr(controller, 'get_verification_code') and email_tab is None:  # Manual mode
             verification_code = controller.get_verification_code()
             if verification_code:
-                # 在注册页面填写验证码
+                # Fill verification code in registration page
                 for i, digit in enumerate(verification_code):
                     browser_tab.ele(f"@data-index={i}").input(digit)
                     time.sleep(get_random_wait_time(config, 'verification_code_input'))
@@ -513,34 +438,34 @@ def handle_verification_code(browser_tab, email_tab, controller, email, password
                 print(f"{translator.get('register.verification_success')}")
                 time.sleep(get_random_wait_time(config, 'verification_success_wait'))
                 
-                # 处理最后一次 Turnstile 验证
+                # Handle last Turnstile verification
                 if handle_turnstile(browser_tab, config, translator):
                     if translator:
                         print(f"{Fore.GREEN}✅ {translator.get('register.verification_success')}{Style.RESET_ALL}")
                     time.sleep(get_random_wait_time(config, 'verification_retry_wait'))
                     
-                    # 访问设置页面
-                    print(f"{Fore.CYAN} {translator.get('register.visiting_url')}: https://www.cursor.com/settings{Style.RESET_ALL}")
+                    # Visit settings page
+                    print(f"{Fore.CYAN}🔑 {translator.get('register.visiting_url')}: https://www.cursor.com/settings{Style.RESET_ALL}")
                     browser_tab.get("https://www.cursor.com/settings")
                     time.sleep(get_random_wait_time(config, 'settings_page_load_wait'))
                     return True, browser_tab
                     
                 return False, None
                 
-        # 自动获取验证码逻辑
+        # Automatic verification code logic
         elif email_tab:
-            print(f"{translator.get('register.waiting_for_verification_code')}")
+            print(f"{Fore.CYAN}🔄 {translator.get('register.waiting_for_verification_code')}{Style.RESET_ALL}")
             time.sleep(get_random_wait_time(config, 'email_check_initial_wait'))
 
-            # 使用已有的 email_tab 刷新邮箱
+            # Use existing email_tab to refresh email
             email_tab.refresh_inbox()
             time.sleep(get_random_wait_time(config, 'email_refresh_wait'))
 
-            # 检查邮箱是否有验证码邮件
+            # Check if there is a verification code email
             if email_tab.check_for_cursor_email():
                 verification_code = email_tab.get_verification_code()
                 if verification_code:
-                    # 在注册页面填写验证码
+                    # Fill verification code in registration page
                     for i, digit in enumerate(verification_code):
                         browser_tab.ele(f"@data-index={i}").input(digit)
                         time.sleep(get_random_wait_time(config, 'verification_code_input'))
@@ -549,13 +474,13 @@ def handle_verification_code(browser_tab, email_tab, controller, email, password
                         print(f"{Fore.GREEN}✅ {translator.get('register.verification_success')}{Style.RESET_ALL}")
                     time.sleep(get_random_wait_time(config, 'verification_success_wait'))
                     
-                    # 处理最后一次 Turnstile 验证
+                    # Handle last Turnstile verification
                     if handle_turnstile(browser_tab, config, translator):
                         if translator:
                             print(f"{Fore.GREEN}✅ {translator.get('register.verification_success')}{Style.RESET_ALL}")
                         time.sleep(get_random_wait_time(config, 'verification_retry_wait'))
                         
-                        # 访问设置页面
+                        # Visit settings page
                         if translator:
                             print(f"{Fore.CYAN}🔑 {translator.get('register.visiting_url')}: https://www.cursor.com/settings{Style.RESET_ALL}")
                         browser_tab.get("https://www.cursor.com/settings")
@@ -569,18 +494,18 @@ def handle_verification_code(browser_tab, email_tab, controller, email, password
                             print("最后一次验证失败")
                         return False, None
                         
-            # 获取验证码，设置超时
+            # Get verification code, set timeout
             verification_code = None
             max_attempts = 20
-            retry_interval = get_random_wait_time(config, 'retry_interval')  # 使用 get_random_wait_time
+            retry_interval = get_random_wait_time(config, 'retry_interval')  # Use get_random_wait_time
             start_time = time.time()
-            timeout = float(config.get('Timing', 'max_timeout', fallback='160'))  # 這個可以保持不變因為是固定值
+            timeout = float(config.get('Timing', 'max_timeout', fallback='160'))  # This can be kept unchanged because it is a fixed value
 
             if translator:
                 print(f"{Fore.CYAN}{translator.get('register.start_getting_verification_code')}{Style.RESET_ALL}")
             
             for attempt in range(max_attempts):
-                # 检查是否超时
+                # Check if timeout
                 if time.time() - start_time > timeout:
                     if translator:
                         print(f"{Fore.RED}❌ {translator.get('register.verification_timeout')}{Style.RESET_ALL}")
@@ -596,12 +521,12 @@ def handle_verification_code(browser_tab, email_tab, controller, email, password
                 if translator:
                     print(f"{Fore.CYAN}{translator.get('register.try_get_code', attempt=attempt + 1, time=remaining_time)}{Style.RESET_ALL}")
                 
-                # 刷新邮箱
+                # Refresh email
                 email_tab.refresh_inbox()
-                time.sleep(retry_interval)  # 使用 get_random_wait_time
+                time.sleep(retry_interval)  # Use get_random_wait_time
             
             if verification_code:
-                # 在注册页面填写验证码
+                # Fill verification code in registration page
                 for i, digit in enumerate(verification_code):
                     browser_tab.ele(f"@data-index={i}").input(digit)
                     time.sleep(get_random_wait_time(config, 'verification_code_input'))
@@ -610,19 +535,19 @@ def handle_verification_code(browser_tab, email_tab, controller, email, password
                     print(f"{Fore.GREEN}✅ {translator.get('register.verification_success')}{Style.RESET_ALL}")
                 time.sleep(get_random_wait_time(config, 'verification_success_wait'))
                 
-                # 处理最后一次 Turnstile 验证
+                # Handle last Turnstile verification
                 if handle_turnstile(browser_tab, config, translator):
                     if translator:
                         print(f"{Fore.GREEN}✅ {translator.get('register.verification_success')}{Style.RESET_ALL}")
                     time.sleep(get_random_wait_time(config, 'verification_retry_wait'))
                     
-                    # 直接访问设置页面
+                    # Visit settings page
                     if translator:
                         print(f"{Fore.CYAN}{translator.get('register.visiting_url')}: https://www.cursor.com/settings{Style.RESET_ALL}")
                     browser_tab.get("https://www.cursor.com/settings")
                     time.sleep(get_random_wait_time(config, 'settings_page_load_wait'))
                     
-                    # 直接返回成功，让 cursor_register.py 处理账户信息获取
+                    # Return success directly, let cursor_register.py handle account information acquisition
                     return True, browser_tab
                     
                 else:
@@ -638,58 +563,60 @@ def handle_verification_code(browser_tab, email_tab, controller, email, password
         return False, None
 
 def handle_sign_in(browser_tab, email, password, translator=None):
-    """处理登录流程"""
+    """Handle login process"""
     try:
-        # 检查是否在登录页面
+        # Check if on login page
         sign_in_header = browser_tab.ele('xpath://h1[contains(text(), "Sign in")]')
         if not sign_in_header:
-            return True  # 如果不是登录页面，说明已经登录成功
+            return True  # If not on login page, it means login is successful
             
         print(f"{Fore.CYAN}检测到登录页面，开始登录...{Style.RESET_ALL}")
         
-        # 填写邮箱
+        # Fill email
         email_input = browser_tab.ele('@name=email')
         if email_input:
             email_input.input(email)
             time.sleep(1)
             
-            # 点击 Continue
+            # Click Continue
             continue_button = browser_tab.ele('xpath://button[contains(@class, "BrandedButton") and text()="Continue"]')
             if continue_button:
                 continue_button.click()
                 time.sleep(2)
                 
-                # 处理 Turnstile 验证
+                # Handle Turnstile verification
                 if handle_turnstile(browser_tab, translator):
-                    # 填写密码
+                    # Fill password
                     password_input = browser_tab.ele('@name=password')
                     if password_input:
                         password_input.input(password)
                         time.sleep(1)
                         
-                        # 点击 Sign in
+                        # Click Sign in
                         sign_in_button = browser_tab.ele('xpath://button[@name="intent" and @value="password"]')
                         if sign_in_button:
                             sign_in_button.click()
                             time.sleep(2)
                             
-                            # 处理最后一次 Turnstile 验证
+                            # Handle last Turnstile verification
                             if handle_turnstile(browser_tab, translator):
-                                print(f"{Fore.GREEN}登录成功！{Style.RESET_ALL}")
+                                print(f"{Fore.GREEN}Login successful!{Style.RESET_ALL}")
                                 time.sleep(3)
                                 return True
                                 
-        print(f"{Fore.RED}登录失败{Style.RESET_ALL}")
+        print(f"{Fore.RED}Login failed{Style.RESET_ALL}")
         return False
         
     except Exception as e:
-        print(f"{Fore.RED}登录过程出错: {str(e)}{Style.RESET_ALL}")
+        print(f"{Fore.RED}Login process error: {str(e)}{Style.RESET_ALL}")
         return False
 
 def main(email=None, password=None, first_name=None, last_name=None, email_tab=None, controller=None, translator=None):
-    """主函数，可以接收账号信息、邮箱标签页和翻译器"""
+    """Main function, can receive account information, email tab, and translator"""
     global _translator
-    _translator = translator  # 保存到全局变量
+    global _chrome_process_ids
+    _translator = translator  # Save to global variable
+    _chrome_process_ids = []  # Reset the process IDs list
     
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
@@ -701,62 +628,59 @@ def main(email=None, password=None, first_name=None, last_name=None, email_tab=N
         if translator:
             print(f"{Fore.CYAN}🚀 {translator.get('register.browser_started')}{Style.RESET_ALL}")
         
-        # 访问注册页面
+        # Visit registration page
         url = "https://authenticator.cursor.sh/sign-up"
-        if translator:
-            print(f"\n{Fore.CYAN}{translator.get('register.visiting_url')}: {url}{Style.RESET_ALL}")
         
-        # 访问页面
+        # Visit page
         simulate_human_input(page, url, config, translator)
         if translator:
-            print(f"{Fore.CYAN}{translator.get('register.waiting_for_page_load')}{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}🔄 {translator.get('register.waiting_for_page_load')}{Style.RESET_ALL}")
         time.sleep(get_random_wait_time(config, 'page_load_wait'))
         
-        # 如果没有提供账号信息，则生成随机信息
+        # If account information is not provided, generate random information
         if not all([email, password, first_name, last_name]):
             first_name = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz', k=6)).capitalize()
             last_name = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz', k=6)).capitalize()
             email = f"{first_name.lower()}{random.randint(100,999)}@example.com"
             password = generate_password()
             
-            # 保存账号信息
+            # Save account information
             with open('test_accounts.txt', 'a', encoding='utf-8') as f:
                 f.write(f"\n{'='*50}\n")
                 f.write(f"Email: {email}\n")
                 f.write(f"Password: {password}\n")
                 f.write(f"{'='*50}\n")
         
-        # 填写表单
+        # Fill form
         if fill_signup_form(page, first_name, last_name, email, config, translator):
             if translator:
-                print(f"\n{Fore.GREEN}{translator.get('register.form_submitted')}{Style.RESET_ALL}")
+                print(f"\n{Fore.GREEN}✅ {translator.get('register.form_submitted')}{Style.RESET_ALL}")
             
-            # 处理第一次 Turnstile 验证
+            # Handle first Turnstile verification
             if handle_turnstile(page, config, translator):
                 if translator:
-                    print(f"\n{Fore.GREEN}{translator.get('register.first_verification_passed')}{Style.RESET_ALL}")
+                    print(f"\n{Fore.GREEN}✅ {translator.get('register.first_verification_passed')}{Style.RESET_ALL}")
                 
-                # 填写密码
+                # Fill password
                 if fill_password(page, password, config, translator):
                     if translator:
-                        print(f"\n{Fore.CYAN}{translator.get('register.waiting_for_second_verification')}{Style.RESET_ALL}")
-                    time.sleep(2)
-                    
-                    # 处理第二次 Turnstile 验证
+                        print(f"\n{Fore.CYAN}🔄 {translator.get('register.waiting_for_second_verification')}{Style.RESET_ALL}")
+                                        
+                    # Handle second Turnstile verification
                     if handle_turnstile(page, config, translator):
                         if translator:
-                            print(f"\n{Fore.CYAN}{translator.get('register.waiting_for_verification_code')}{Style.RESET_ALL}")
-                        if handle_verification_code(page, email_tab, controller, email, password, config, translator):
+                            print(f"\n{Fore.CYAN}🔄 {translator.get('register.waiting_for_verification_code')}{Style.RESET_ALL}")
+                        if handle_verification_code(page, email_tab, controller, config, translator):
                             success = True
                             return True, page
                         else:
-                            print(f"\n{Fore.RED} {translator.get('register.verification_code_processing_failed') if translator else '验证码处理失败'}{Style.RESET_ALL}")
+                            print(f"\n{Fore.RED}❌ {translator.get('register.verification_code_processing_failed') if translator else 'Verification code processing failed'}{Style.RESET_ALL}")
                     else:
-                        print(f"\n{Fore.RED} {translator.get('register.second_verification_failed') if translator else '第二次验证失败'}{Style.RESET_ALL}")
+                        print(f"\n{Fore.RED}❌ {translator.get('register.second_verification_failed') if translator else 'Second verification failed'}{Style.RESET_ALL}")
                 else:
-                    print(f"\n{Fore.RED} {translator.get('register.second_verification_failed') if translator else '第二次验证失败'}{Style.RESET_ALL}")
+                    print(f"\n{Fore.RED}❌ {translator.get('register.second_verification_failed') if translator else 'Second verification failed'}{Style.RESET_ALL}")
             else:
-                print(f"\n{Fore.RED} {translator.get('register.first_verification_failed') if translator else '第一次验证失败'}{Style.RESET_ALL}")
+                print(f"\n{Fore.RED}❌ {translator.get('register.first_verification_failed') if translator else 'First verification failed'}{Style.RESET_ALL}")
         
         return False, None
         
@@ -764,7 +688,7 @@ def main(email=None, password=None, first_name=None, last_name=None, email_tab=N
         print(f"发生错误: {e}")
         return False, None
     finally:
-        if page and not success:  # 只在失败时清理
+        if page and not success:  # Only clean up when failed
             try:
                 page.quit()
             except:
@@ -772,4 +696,4 @@ def main(email=None, password=None, first_name=None, last_name=None, email_tab=N
             cleanup_chrome_processes(translator)
 
 if __name__ == "__main__":
-    main()  # 直接运行时不传参数，使用随机生成的信息 
+    main()  # Run without parameters, use randomly generated information 
