@@ -23,21 +23,14 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('turnstilePatch', 'turnstilePatch'),
-        ('PBlock', 'PBlock'),
         ('locales', 'locales'),
-        ('cursor_auth.py', '.'),
-        ('reset_machine_manual.py', '.'),
-        ('cursor_register.py', '.'),
-        ('browser.py', '.'),
-        ('control.py', '.'),
+        ('quit_cursor.py', '.'),
+        ('utils.py', '.'),
         ('.env', '.')
     ],
     hiddenimports=[
-        'cursor_auth',
-        'reset_machine_manual',
-        'browser',
-        'control'
+        'quit_cursor',
+        'utils'
     ],
     hookspath=[],
     hooksconfig={},
@@ -60,7 +53,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=True,

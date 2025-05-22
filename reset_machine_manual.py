@@ -8,11 +8,13 @@ import sqlite3
 import platform
 import re
 import tempfile
+import glob
 from colorama import Fore, Style, init
 from typing import Tuple
 import configparser
-from new_signup import get_user_documents_path
 import traceback
+from config import get_config
+from datetime import datetime
 
 # Initialize colorama
 init()
@@ -25,23 +27,95 @@ EMOJI = {
     "ERROR": "❌",
     "INFO": "ℹ️",
     "RESET": "🔄",
+    "WARNING": "⚠️",
 }
+
+def get_user_documents_path():
+     """Get user Documents folder path"""
+     if sys.platform == "win32":
+         try:
+             import winreg
+             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders") as key:
+                 documents_path, _ = winreg.QueryValueEx(key, "Personal")
+                 return documents_path
+         except Exception as e:
+             # fallback
+             return os.path.join(os.path.expanduser("~"), "Documents")
+     elif sys.platform == "darwin":
+         return os.path.join(os.path.expanduser("~"), "Documents")
+     else:  # Linux
+         # Get actual user's home directory
+         sudo_user = os.environ.get('SUDO_USER')
+         if sudo_user:
+             return os.path.join("/home", sudo_user, "Documents")
+         return os.path.join(os.path.expanduser("~"), "Documents")
+     
 
 def get_cursor_paths(translator=None) -> Tuple[str, str]:
     """ Get Cursor related paths"""
     system = platform.system()
     
-    # 讀取配置文件
+    # Read config file
     config = configparser.ConfigParser()
     config_dir = os.path.join(get_user_documents_path(), ".cursor-free-vip")
     config_file = os.path.join(config_dir, "config.ini")
     
-    if not os.path.exists(config_file):
-        raise OSError(translator.get('reset.config_not_found') if translator else "找不到配置文件")
-        
-    config.read(config_file)
+    # Create config directory if it doesn't exist
+    if not os.path.exists(config_dir):
+        os.makedirs(config_dir)
     
-    # 根據系統獲取路徑
+    # Default paths for different systems
+    default_paths = {
+        "Darwin": "/Applications/Cursor.app/Contents/Resources/app",
+        "Windows": os.path.join(os.getenv("LOCALAPPDATA", ""), "Programs", "Cursor", "resources", "app"),
+        "Linux": ["/opt/Cursor/resources/app", "/usr/share/cursor/resources/app", os.path.expanduser("~/.local/share/cursor/resources/app"), "/usr/lib/cursor/app/"]
+    }
+    
+    if system == "Linux":
+        # Look for extracted AppImage with correct usr structure
+        extracted_usr_paths = glob.glob(os.path.expanduser("~/squashfs-root/usr/share/cursor/resources/app"))
+        # Also check current directory for extraction without home path prefix
+        current_dir_paths = glob.glob("squashfs-root/usr/share/cursor/resources/app")
+        
+        # Add any found paths to the Linux paths list
+        default_paths["Linux"].extend(extracted_usr_paths)
+        default_paths["Linux"].extend(current_dir_paths)
+        
+        # Print debug information
+        print(f"{Fore.CYAN}{EMOJI['INFO']} Available paths found:{Style.RESET_ALL}")
+        for path in default_paths["Linux"]:
+            if os.path.exists(path):
+                print(f"{Fore.GREEN}{EMOJI['SUCCESS']} {path} (exists){Style.RESET_ALL}")
+            else:
+                print(f"{Fore.RED}{EMOJI['ERROR']} {path} (not found){Style.RESET_ALL}")
+    
+    
+    # If config doesn't exist, create it with default paths
+    if not os.path.exists(config_file):
+        for section in ['MacPaths', 'WindowsPaths', 'LinuxPaths']:
+            if not config.has_section(section):
+                config.add_section(section)
+        
+        if system == "Darwin":
+            config.set('MacPaths', 'cursor_path', default_paths["Darwin"])
+        elif system == "Windows":
+            config.set('WindowsPaths', 'cursor_path', default_paths["Windows"])
+        elif system == "Linux":
+            # For Linux, try to find the first existing path
+            for path in default_paths["Linux"]:
+                if os.path.exists(path):
+                    config.set('LinuxPaths', 'cursor_path', path)
+                    break
+            else:
+                # If no path exists, use the first one as default
+                config.set('LinuxPaths', 'cursor_path', default_paths["Linux"][0])
+        
+        with open(config_file, 'w', encoding='utf-8') as f:
+            config.write(f)
+    else:
+        config.read(config_file, encoding='utf-8')
+    
+    # Get path based on system
     if system == "Darwin":
         section = 'MacPaths'
     elif system == "Windows":
@@ -50,19 +124,30 @@ def get_cursor_paths(translator=None) -> Tuple[str, str]:
         section = 'LinuxPaths'
     else:
         raise OSError(translator.get('reset.unsupported_os', system=system) if translator else f"不支持的操作系统: {system}")
-        
+    
     if not config.has_section(section) or not config.has_option(section, 'cursor_path'):
         raise OSError(translator.get('reset.path_not_configured') if translator else "未配置 Cursor 路徑")
-        
+    
     base_path = config.get(section, 'cursor_path')
+    
+    # For Linux, try to find the first existing path if the configured one doesn't exist
+    if system == "Linux" and not os.path.exists(base_path):
+        for path in default_paths["Linux"]:
+            if os.path.exists(path):
+                base_path = path
+                # Update config with the found path
+                config.set(section, 'cursor_path', path)
+                with open(config_file, 'w', encoding='utf-8') as f:
+                    config.write(f)
+                break
     
     if not os.path.exists(base_path):
         raise OSError(translator.get('reset.path_not_found', path=base_path) if translator else f"找不到 Cursor 路徑: {base_path}")
-        
+    
     pkg_path = os.path.join(base_path, "package.json")
     main_path = os.path.join(base_path, "out/main.js")
     
-    # 檢查文件是否存在
+    # Check if files exist
     if not os.path.exists(pkg_path):
         raise OSError(translator.get('reset.package_not_found', path=pkg_path) if translator else f"找不到 package.json: {pkg_path}")
     if not os.path.exists(main_path):
@@ -95,7 +180,7 @@ def get_cursor_machine_id_path(translator=None) -> str:
         if not config.has_section('LinuxPaths'):
             config.add_section('LinuxPaths')
             config.set('LinuxPaths', 'machine_id_path',
-                os.path.expanduser("~/.config/Cursor/machineId"))
+                os.path.expanduser("~/.config/cursor/machineid"))
         return config.get('LinuxPaths', 'machine_id_path')
         
     elif sys.platform == "darwin":  # macOS
@@ -115,6 +200,14 @@ def get_cursor_machine_id_path(translator=None) -> str:
 def get_workbench_cursor_path(translator=None) -> str:
     """Get Cursor workbench.desktop.main.js path"""
     system = platform.system()
+
+    # Read configuration
+    config_dir = os.path.join(get_user_documents_path(), ".cursor-free-vip")
+    config_file = os.path.join(config_dir, "config.ini")
+    config = configparser.ConfigParser()
+
+    if os.path.exists(config_file):
+        config.read(config_file)
     
     paths_map = {
         "Darwin": {  # macOS
@@ -122,14 +215,19 @@ def get_workbench_cursor_path(translator=None) -> str:
             "main": "out/vs/workbench/workbench.desktop.main.js"
         },
         "Windows": {
-            "base": os.path.join(os.getenv("LOCALAPPDATA", ""), "Programs", "Cursor", "resources", "app"),
-            "main": "out/vs/workbench/workbench.desktop.main.js"
+            "main": "out\\vs\\workbench\\workbench.desktop.main.js"
         },
         "Linux": {
-            "bases": ["/opt/Cursor/resources/app", "/usr/share/cursor/resources/app"],
+            "bases": ["/opt/Cursor/resources/app", "/usr/share/cursor/resources/app", "/usr/lib/cursor/app/"],
             "main": "out/vs/workbench/workbench.desktop.main.js"
         }
     }
+    
+    if system == "Linux":
+        # Add extracted AppImage with correct usr structure
+        extracted_usr_paths = glob.glob(os.path.expanduser("~/squashfs-root/usr/share/cursor/resources/app"))
+            
+        paths_map["Linux"]["bases"].extend(extracted_usr_paths)
 
     if system not in paths_map:
         raise OSError(translator.get('reset.unsupported_os', system=system) if translator else f"不支持的操作系统: {system}")
@@ -137,11 +235,23 @@ def get_workbench_cursor_path(translator=None) -> str:
     if system == "Linux":
         for base in paths_map["Linux"]["bases"]:
             main_path = os.path.join(base, paths_map["Linux"]["main"])
+            print(f"{Fore.CYAN}{EMOJI['INFO']} Checking path: {main_path}{Style.RESET_ALL}")
             if os.path.exists(main_path):
                 return main_path
-        raise OSError(translator.get('reset.linux_path_not_found') if translator else "在 Linux 系统上未找到 Cursor 安装路径")
 
-    base_path = paths_map[system]["base"]
+    if system == "Windows":
+        base_path = config.get('WindowsPaths', 'cursor_path')
+    elif system == "Darwin":
+        base_path = paths_map[system]["base"]
+        if config.has_section('MacPaths') and config.has_option('MacPaths', 'cursor_path'):
+            base_path = config.get('MacPaths', 'cursor_path')
+    else:  # Linux
+        # For Linux, we've already checked all bases in the loop above
+        # If we're here, it means none of the bases worked, so we'll use the first one
+        base_path = paths_map[system]["bases"][0]
+        if config.has_section('LinuxPaths') and config.has_option('LinuxPaths', 'cursor_path'):
+            base_path = config.get('LinuxPaths', 'cursor_path')
+
     main_path = os.path.join(base_path, paths_map[system]["main"])
     
     if not os.path.exists(main_path):
@@ -186,7 +296,7 @@ def check_cursor_version(translator) -> bool:
             with open(pkg_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except UnicodeDecodeError:
-            # 如果 UTF-8 讀取失敗，嘗試其他編碼
+            # If UTF-8 reading fails, try other encodings
             with open(pkg_path, "r", encoding="latin-1") as f:
                 data = json.load(f)
                 
@@ -205,15 +315,15 @@ def check_cursor_version(translator) -> bool:
             
         print(f"{Fore.CYAN}{EMOJI['INFO']} {translator.get('reset.found_version', version=version)}{Style.RESET_ALL}")
         
-        # 檢查版本格式
+        # Check version format
         if not re.match(r"^\d+\.\d+\.\d+$", version):
             print(f"{Fore.RED}{EMOJI['ERROR']} {translator.get('reset.invalid_version_format', version=version)}{Style.RESET_ALL}")
             return False
             
-        # 比較版本
+        # Compare versions
         try:
             current = tuple(map(int, version.split(".")))
-            min_ver = (0, 45, 0)  # 直接使用元組而不是字符串
+            min_ver = (0, 45, 0)  # Use tuple directly instead of string
             
             if current >= min_ver:
                 print(f"{Fore.GREEN}{EMOJI['SUCCESS']} {translator.get('reset.version_check_passed', version=version, min_version='0.45.0')}{Style.RESET_ALL}")
@@ -253,37 +363,40 @@ def modify_workbench_js(file_path: str, translator=None) -> bool:
             with open(file_path, "r", encoding="utf-8", errors="ignore") as main_file:
                 content = main_file.read()
 
-            if sys.platform == "win32":
-                # Define replacement patterns
-                CButton_old_pattern = r'$(k,E(Ks,{title:"Upgrade to Pro",size:"small",get codicon(){return F.rocket},get onClick(){return t.pay}}),null)'
-                CButton_new_pattern = r'$(k,E(Ks,{title:"yeongpin GitHub",size:"small",get codicon(){return F.rocket},get onClick(){return function(){window.open("https://github.com/yeongpin/cursor-free-vip","_blank")}}}),null)'
-            elif sys.platform == "linux":
-                CButton_old_pattern = r'$(k,E(Ks,{title:"Upgrade to Pro",size:"small",get codicon(){return F.rocket},get onClick(){return t.pay}}),null)'
-                CButton_new_pattern = r'$(k,E(Ks,{title:"yeongpin GitHub",size:"small",get codicon(){return F.rocket},get onClick(){return function(){window.open("https://github.com/yeongpin/cursor-free-vip","_blank")}}}),null)'
-            elif sys.platform == "darwin":
-                CButton_old_pattern = r'M(x,I(as,{title:"Upgrade to Pro",size:"small",get codicon(){return $.rocket},get onClick(){return t.pay}}),null)'
-                CButton_new_pattern = r'M(x,I(as,{title:"yeongpin GitHub",size:"small",get codicon(){return $.rocket},get onClick(){return function(){window.open("https://github.com/yeongpin/cursor-free-vip","_blank")}}}),null)'
+            patterns = {
+                # 通用按钮替换模式
+                r'B(k,D(Ln,{title:"Upgrade to Pro",size:"small",get codicon(){return A.rocket},get onClick(){return t.pay}}),null)': r'B(k,D(Ln,{title:"yeongpin GitHub",size:"small",get codicon(){return A.github},get onClick(){return function(){window.open("https://github.com/yeongpin/cursor-free-vip","_blank")}}}),null)',
+                
+                # Windows/Linux/Mac 通用按钮替换模式
+                r'M(x,I(as,{title:"Upgrade to Pro",size:"small",get codicon(){return $.rocket},get onClick(){return t.pay}}),null)': r'M(x,I(as,{title:"yeongpin GitHub",size:"small",get codicon(){return $.rocket},get onClick(){return function(){window.open("https://github.com/yeongpin/cursor-free-vip","_blank")}}}),null)',
+                
+                # Badge 替换
+                r'<div>Pro Trial': r'<div>Pro',
 
-            CBadge_old_pattern = r'<div>Pro Trial'
-            CBadge_new_pattern = r'<div>Pro'
+                r'py-1">Auto-select': r'py-1">Bypass-Version-Pin',
+                
+                #
+                r'async getEffectiveTokenLimit(e){const n=e.modelName;if(!n)return 2e5;':r'async getEffectiveTokenLimit(e){return 9000000;const n=e.modelName;if(!n)return 9e5;',
+                # Pro
+                r'var DWr=ne("<div class=settings__item_description>You are currently signed in with <strong></strong>.");': r'var DWr=ne("<div class=settings__item_description>You are currently signed in with <strong></strong>. <h1>Pro</h1>");',
+                
+                # Toast 替换
+                r'notifications-toasts': r'notifications-toasts hidden'
+            }
 
-            CToast_old_pattern = r'notifications-toasts'
-            CToast_new_pattern = r'notifications-toasts hidden'
-
-            # Replace content
-            content = content.replace(CButton_old_pattern, CButton_new_pattern)
-            content = content.replace(CBadge_old_pattern, CBadge_new_pattern)
-            content = content.replace(CToast_old_pattern, CToast_new_pattern)
+            # 使用patterns进行替换
+            for old_pattern, new_pattern in patterns.items():
+                content = content.replace(old_pattern, new_pattern)
 
             # Write to temporary file
             tmp_file.write(content)
             tmp_path = tmp_file.name
 
-        # Backup original file
-        backup_path = file_path + ".backup"
-        if os.path.exists(backup_path):
-            os.remove(backup_path)
+        # Backup original file with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = f"{file_path}.backup.{timestamp}"
         shutil.copy2(file_path, backup_path)
+        print(f"{Fore.GREEN}{EMOJI['SUCCESS']} {translator.get('reset.backup_created', path=backup_path)}{Style.RESET_ALL}")
         
         # Move temporary file to original position
         if os.path.exists(file_path):
@@ -330,7 +443,10 @@ def modify_main_js(main_path: str, translator) -> bool:
             tmp_file.write(content)
             tmp_path = tmp_file.name
 
-        shutil.copy2(main_path, main_path + ".old")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = f"{main_path}.old.{timestamp}"
+        shutil.copy2(main_path, backup_path)
+        print(f"{Fore.GREEN}{EMOJI['SUCCESS']} {translator.get('reset.backup_created', path=backup_path)}{Style.RESET_ALL}")
         shutil.move(tmp_path, main_path)
 
         os.chmod(main_path, original_mode)
@@ -380,7 +496,8 @@ def patch_cursor_get_machine_id(translator) -> bool:
         print(f"{Fore.CYAN}{EMOJI['INFO']} {translator.get('reset.version_check_passed')}{Style.RESET_ALL}")
 
         # Backup file
-        backup_path = main_path + ".bak"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = f"{main_path}.bak.{timestamp}"
         if not os.path.exists(backup_path):
             shutil.copy2(main_path, backup_path)
             print(f"{Fore.GREEN}{EMOJI['SUCCESS']} {translator.get('reset.backup_created', path=backup_path)}{Style.RESET_ALL}")
@@ -408,7 +525,7 @@ class MachineIDResetter:
         if not os.path.exists(config_file):
             raise FileNotFoundError(f"Config file not found: {config_file}")
         
-        config.read(config_file)
+        config.read(config_file, encoding='utf-8')
 
         # Check operating system
         if sys.platform == "win32":  # Windows
@@ -444,17 +561,17 @@ class MachineIDResetter:
         elif sys.platform == "linux":  # Linux
             if not config.has_section('LinuxPaths'):
                 config.add_section('LinuxPaths')
-                # 获取实际用户的主目录
+                # Get actual user's home directory
                 sudo_user = os.environ.get('SUDO_USER')
                 actual_home = f"/home/{sudo_user}" if sudo_user else os.path.expanduser("~")
                 
                 config.set('LinuxPaths', 'storage_path', os.path.abspath(os.path.join(
                     actual_home,
-                    ".config/Cursor/User/globalStorage/storage.json"
+                    ".config/cursor/User/globalStorage/storage.json"
                 )))
                 config.set('LinuxPaths', 'sqlite_path', os.path.abspath(os.path.join(
                     actual_home,
-                    ".config/Cursor/User/globalStorage/state.vscdb"
+                    ".config/cursor/User/globalStorage/state.vscdb"
                 )))
                 
             self.db_path = config.get('LinuxPaths', 'storage_path')
@@ -533,6 +650,7 @@ class MachineIDResetter:
             
             if sys.platform.startswith("win"):
                 self._update_windows_machine_guid()
+                self._update_windows_machine_id()
             elif sys.platform == "darwin":
                 self._update_macos_platform_uuid(new_ids)
                 
@@ -556,12 +674,51 @@ class MachineIDResetter:
             winreg.SetValueEx(key, "MachineGuid", 0, winreg.REG_SZ, new_guid)
             winreg.CloseKey(key)
             print(f"{Fore.GREEN}{EMOJI['SUCCESS']} {self.translator.get('reset.windows_machine_guid_updated')}{Style.RESET_ALL}")
-        except PermissionError:
-            print(f"{Fore.RED}{EMOJI['ERROR']} {self.translator.get('reset.permission_denied')}{Style.RESET_ALL}")
+        except PermissionError as e:
+            print(f"{Fore.RED}{EMOJI['ERROR']} {self.translator.get('reset.permission_denied', error=str(e))}{Style.RESET_ALL}")
             raise
         except Exception as e:
             print(f"{Fore.RED}{EMOJI['ERROR']} {self.translator.get('reset.update_windows_machine_guid_failed', error=str(e))}{Style.RESET_ALL}")
             raise
+    
+    def _update_windows_machine_id(self):
+        """Update Windows MachineId in SQMClient registry"""
+        try:
+            import winreg
+            # 1. Generate new GUID
+            new_guid = "{" + str(uuid.uuid4()).upper() + "}"
+            print(f"{Fore.CYAN}{EMOJI['INFO']} {self.translator.get('reset.new_machine_id')}: {new_guid}{Style.RESET_ALL}")
+            
+            # 2. Open the registry key
+            try:
+                key = winreg.OpenKey(
+                    winreg.HKEY_LOCAL_MACHINE,
+                    r"SOFTWARE\Microsoft\SQMClient",
+                    0,
+                    winreg.KEY_WRITE | winreg.KEY_WOW64_64KEY
+                )
+            except FileNotFoundError:
+                # If the key does not exist, create it
+                key = winreg.CreateKey(
+                    winreg.HKEY_LOCAL_MACHINE,
+                    r"SOFTWARE\Microsoft\SQMClient"
+                )
+            
+            # 3. Set MachineId value
+            winreg.SetValueEx(key, "MachineId", 0, winreg.REG_SZ, new_guid)
+            winreg.CloseKey(key)
+            
+            print(f"{Fore.GREEN}{EMOJI['SUCCESS']} {self.translator.get('reset.windows_machine_id_updated')}{Style.RESET_ALL}")
+            return True
+            
+        except PermissionError:
+            print(f"{Fore.RED}{EMOJI['ERROR']} {self.translator.get('reset.permission_denied')}{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}{EMOJI['WARNING']} {self.translator.get('reset.run_as_admin')}{Style.RESET_ALL}")
+            return False
+        except Exception as e:
+            print(f"{Fore.RED}{EMOJI['ERROR']} {self.translator.get('reset.update_windows_machine_id_failed', error=str(e))}{Style.RESET_ALL}")
+            return False
+                    
 
     def _update_macos_platform_uuid(self, new_ids):
         """Update macOS Platform UUID"""
@@ -596,12 +753,10 @@ class MachineIDResetter:
             with open(self.db_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
 
-            backup_path = self.db_path + ".bak"
-            if not os.path.exists(backup_path):
-                print(f"{Fore.YELLOW}{EMOJI['BACKUP']} {self.translator.get('reset.creating_backup')}: {backup_path}{Style.RESET_ALL}")
-                shutil.copy2(self.db_path, backup_path)
-            else:
-                print(f"{Fore.YELLOW}{EMOJI['INFO']} {self.translator.get('reset.backup_exists')}{Style.RESET_ALL}")
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = f"{self.db_path}.bak.{timestamp}"
+            print(f"{Fore.YELLOW}{EMOJI['BACKUP']} {self.translator.get('reset.creating_backup')}: {backup_path}{Style.RESET_ALL}")
+            shutil.copy2(self.db_path, backup_path)
 
             print(f"{Fore.CYAN}{EMOJI['RESET']} {self.translator.get('reset.generating')}...{Style.RESET_ALL}")
             new_ids = self.generate_new_ids()
@@ -620,13 +775,10 @@ class MachineIDResetter:
             self.update_system_ids(new_ids)
 
 
-            ### Remove In v1.7.02
             # Modify workbench.desktop.main.js
-            
-            # workbench_path = get_workbench_cursor_path(self.translator)
-            # modify_workbench_js(workbench_path, self.translator)
+            workbench_path = get_workbench_cursor_path(self.translator)
+            modify_workbench_js(workbench_path, self.translator)
 
-            ### Remove In v1.7.02
             # Check Cursor version and perform corresponding actions
             
             greater_than_0_45 = check_cursor_version(self.translator)
@@ -668,7 +820,8 @@ class MachineIDResetter:
 
             # Create backup if file exists
             if os.path.exists(machine_id_path):
-                backup_path = machine_id_path + ".backup"
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup_path = f"{machine_id_path}.backup.{timestamp}"
                 try:
                     shutil.copy2(machine_id_path, backup_path)
                     print(f"{Fore.GREEN}{EMOJI['INFO']} {self.translator.get('reset.backup_created', path=backup_path) if self.translator else f'Backup created at: {backup_path}'}{Style.RESET_ALL}")
@@ -690,7 +843,9 @@ class MachineIDResetter:
             return False
 
 def run(translator=None):
-    """Convenient function for directly calling the reset function"""
+    config = get_config(translator)
+    if not config:
+        return False
     print(f"\n{Fore.CYAN}{'='*50}{Style.RESET_ALL}")
     print(f"{Fore.CYAN}{EMOJI['RESET']} {translator.get('reset.title')}{Style.RESET_ALL}")
     print(f"{Fore.CYAN}{'='*50}{Style.RESET_ALL}")
